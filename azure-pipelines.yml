@@ -1,0 +1,72 @@
+
+trigger:
+- main
+
+variables:
+  azureSubscription: '<Your-Service-Connection-Name>'
+  appName: 'financial-app-service'
+  rgName: 'rg-financial-app'
+  location: 'East US'
+
+stages:
+- stage: Build
+  jobs:
+  - job: BuildAndTest
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '20.x'
+    - script: |
+        cd app
+        npm install
+        npm test
+      displayName: 'Install & Test'
+    - task: SonarQubePrepare@5
+      inputs:
+        SonarQube: '<Your-SonarQube-Service-Connection>'
+        scannerMode: 'CLI'
+        configMode: 'manual'
+        cliProjectKey: 'financial-api'
+        cliSources: 'app'
+    - script: |
+        sonar-scanner
+      displayName: 'Run SonarQube Analysis'
+    - task: SonarQubePublish@5
+      inputs:
+        pollingTimeoutSec: '300'
+
+- stage: DeployInfra
+  dependsOn: Build
+  jobs:
+  - job: TerraformDeploy
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: TerraformInstaller@1
+      inputs:
+        terraformVersion: '1.6.0'
+    - script: |
+        cd infra
+        terraform init
+        terraform apply -auto-approve
+      displayName: 'Deploy Infra with Terraform'
+      env:
+        ARM_CLIENT_ID: $(servicePrincipalId)
+        ARM_CLIENT_SECRET: $(servicePrincipalKey)
+        ARM_SUBSCRIPTION_ID: $(subscriptionId)
+        ARM_TENANT_ID: $(tenantId)
+
+- stage: DeployApp
+  dependsOn: DeployInfra
+  jobs:
+  - job: Deploy
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: AzureWebApp@1
+      inputs:
+        azureSubscription: $(azureSubscription)
+        appName: $(appName)
+        package: '$(System.DefaultWorkingDirectory)/app'
